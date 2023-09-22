@@ -2,8 +2,7 @@ import React, { useState, useRef, useEffect } from 'react';
 import { v4 as uuidv4 } from 'uuid';
 import { Howl } from 'howler';
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
-//import { faRecord } from '@fortawesome/free-solid-svg-icons/faRecord';
-import { faPlay, faPause, faStop, faTrash, faUndo, faRedo, faRecordVinyl, fastart} from '@fortawesome/free-solid-svg-icons';
+import { faPlay, faPause, faStop, faTrash, faUndo, faRedo, faRecordVinyl, faPlus } from '@fortawesome/free-solid-svg-icons';
 
 import './App.css';
 
@@ -38,307 +37,198 @@ function App() {
     } else if (event.code === 'KeyR') {
       event.preventDefault();
       toggleRecording();
-    } else if (event.code === 'KeyZ' && (event.ctrlKey || event.metaKey)) {
+    } else if (event.code === 'KeyS') {
+      event.preventDefault();
+      stopPlayback();
+    } else if (event.code === 'KeyZ' && event.ctrlKey) {
       event.preventDefault();
       if (event.shiftKey) {
         redo();
       } else {
         undo();
       }
+    } else if (event.code === 'Delete') {
+      event.preventDefault();
+      deleteActiveTrack();
     }
-  }
-
-  function addTrack() {
-    const newTrack = {
-      id: uuidv4(),
-      name: `Track ${tracks.length + 1}`,
-      audioChunks: [],
-      volume: 1,
-      pan: 0,
-      isMuted: false,
-      isSoloed: false,
-      effects: [],
-    };
-    setTracks([...tracks, newTrack]);
-    setActiveTrackId(newTrack.id);
-  }
-
-  function removeTrack(trackId) {
-    setTracks(tracks.filter(track => track.id !== trackId));
-    setActiveTrackId(null);
   }
 
   function toggleRecording() {
-    if (!navigator.mediaDevices) {
-      alert("Your browser doesn't support audio recording.");
-      return;
-    }
-
-    if (!mediaRecorderRef.current || mediaRecorderRef.current.state === 'inactive') {
-      startRecording();
-    } else {
+    if (isRecording) {
       stopRecording();
+    } else {
+      startRecording();
     }
   }
 
-  async function startRecording() {
-    try {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      mediaRecorderRef.current = new MediaRecorder(stream);
-      mediaRecorderRef.current.addEventListener('dataavailable', handleDataAvailable);
-      mediaRecorderRef.current.start();
-      setIsRecording(true);
-    } catch (error) {
-      console.error(error);
-    }
+  function startRecording() {
+    setIsRecording(true);
+    setAudioChunks([]);
+    mediaRecorderRef.current = new MediaRecorder(window.stream);
+    mediaRecorderRef.current.addEventListener('dataavailable', handleDataAvailable);
+    mediaRecorderRef.current.start();
   }
 
   function stopRecording() {
-    mediaRecorderRef.current.stop();
     setIsRecording(false);
+    mediaRecorderRef.current.stop();
+    const newTrack = {
+      id: uuidv4(),
+      name: `Track ${tracks.length + 1}`,
+      duration: formatDuration(audioChunks.length * 100),
+      audioChunks: audioChunks,
+    };
+    setTracks((tracks) => [...tracks, newTrack]);
+    setActiveTrackId(newTrack.id);
+    setUndoStack((stack) => [...stack, { type: 'add', track: newTrack }]);
+    setRedoStack([]);
   }
 
   function handleDataAvailable(event) {
-    if (event.data.size > 0) {
-      setAudioChunks((chunks) => [...chunks, event.data]);
-    }
+    setAudioChunks((chunks) => [...chunks, event.data]);
   }
 
   function startPlayback() {
     if (!activeTrackId) {
-      return;
+      setActiveTrackId(tracks[0].id);
     }
-
-    const activeTrack = tracks.find(track => track.id === activeTrackId);
-    const audioUrl = URL.createObjectURL(new Blob(activeTrack.audioChunks));
-    const sound = new Howl({
-      src: [audioUrl],
-      format: 'webm',
-      onload: () => {
-        setIsPlaying(true);
-        playbackIntervalRef.current = setInterval(() => {
-          setPlaybackPosition(sound.seek() * 1000);
-        }, 50);
-      },
-      onend: () => {
-        setIsPlaying(false);
-        setPlaybackPosition(0);
-        clearInterval(playbackIntervalRef.current);
-      },
-    });
-    sound.play();
+    setIsPlaying(true);
+    playbackIntervalRef.current = setInterval(() => {
+      setPlaybackPosition((position) => position + 100);
+    }, 100);
   }
 
   function pausePlayback() {
-    const activeTrack = tracks.find(track => track.id === activeTrackId);
-    const sound = Howl._howls.find(howl => howl._src === URL.createObjectURL(new Blob(activeTrack.audioChunks)));
-    sound.pause();
     setIsPlaying(false);
     clearInterval(playbackIntervalRef.current);
   }
 
   function stopPlayback() {
-    const activeTrack = tracks.find(track => track.id === activeTrackId);
-    const sound = Howl._howls.find(howl => howl._src === URL.createObjectURL(new Blob(activeTrack.audioChunks)));
-    sound.stop();
     setIsPlaying(false);
     setPlaybackPosition(0);
     clearInterval(playbackIntervalRef.current);
   }
 
   function undo() {
-    if (undoStack.length === 0) {
-      return;
-    }
-
-    const lastAction = undoStack.pop();
-    setRedoStack([...redoStack, lastAction]);
-
-    switch (lastAction.type) {
-      case 'RECORD':
-        const activeTrackIndex = tracks.findIndex(track => track.id === activeTrackId);
-        const activeTrack = tracks[activeTrackIndex];
-        const audioChunks = activeTrack.audioChunks.slice(0, -1);
-        const newTrack = { ...activeTrack, audioChunks };
-        setTracks([...tracks.slice(0, activeTrackIndex), newTrack, ...tracks.slice(activeTrackIndex + 1)]);
-        break;
-      case 'ADD_TRACK':
-        setTracks(tracks.filter(track => track.id !== lastAction.trackId));
-        setActiveTrackId(null);
-        break;
-      case 'REMOVE_TRACK':
-        setTracks([...tracks, lastAction.track]);
-        setActiveTrackId(lastAction.track.id);
-        break;
-      default:
-        break;
+    if (undoStack.length > 0) {
+      const lastAction = undoStack[undoStack.length - 1];
+      setUndoStack((stack) => stack.slice(0, -1));
+      setRedoStack((stack) => [...stack, lastAction]);
+      switch (lastAction.type) {
+        case 'add':
+          setTracks((tracks) => tracks.filter((track) => track.id !== lastAction.track.id));
+          setActiveTrackId(null);
+          break;
+        case 'delete':
+          setTracks((tracks) => [...tracks, lastAction.track]);
+          setActiveTrackId(lastAction.track.id);
+          break;
+        default:
+          break;
+      }
     }
   }
 
   function redo() {
-    if (redoStack.length === 0) {
-      return;
+    if (redoStack.length > 0) {
+      const lastAction = redoStack[redoStack.length - 1];
+      setRedoStack((stack) => stack.slice(0, -1));
+      setUndoStack((stack) => [...stack, lastAction]);
+      switch (lastAction.type) {
+        case 'add':
+          setTracks((tracks) => [...tracks, lastAction.track]);
+          setActiveTrackId(lastAction.track.id);
+          break;
+        case 'delete':
+          setTracks((tracks) => tracks.filter((track) => track.id !== lastAction.track.id));
+          setActiveTrackId(null);
+          break;
+        default:
+          break;
+      }
     }
+  }
 
-    const lastAction = redoStack.pop();
-    setUndoStack([...undoStack, lastAction]);
-
-    switch (lastAction.type) {
-      case 'RECORD':
-        const activeTrackIndex = tracks.findIndex(track => track.id === activeTrackId);
-        const activeTrack = tracks[activeTrackIndex];
-        const audioChunks = [...activeTrack.audioChunks, lastAction.audioChunk];
-        const updatedTrack = { ...activeTrack, audioChunks };
-        setTracks([...tracks.slice(0, activeTrackIndex), updatedTrack, ...tracks.slice(activeTrackIndex + 1)]);
-        break;
-      case 'ADD_TRACK':
-        const newTrackObj = { ...lastAction.track };
-        setTracks([...tracks, newTrackObj]);
-        setActiveTrackId(newTrackObj.id);
-        break;
-      case 'REMOVE_TRACK':
-        setTracks(tracks.filter(track => track.id !== lastAction.trackId));
+  function deleteActiveTrack() {
+    if (activeTrackId) {
+      const trackToDelete = tracks.find((track) => track.id === activeTrackId);
+      if (trackToDelete) {
+        setTracks((tracks) => tracks.filter((track) => track.id !== activeTrackId));
+        setUndoStack((stack) => [...stack, { type: 'delete', track: trackToDelete }]);
+        setRedoStack([]);
         setActiveTrackId(null);
-        break;
-      default:
-        break;
+      }
     }
   }
 
-  function handleVolumeChange(trackId, volume) {
-    const trackIndex = tracks.findIndex(track => track.id === trackId);
-    const track = tracks[trackIndex];
-    const newTrack = { ...track, volume };
-    setTracks([...tracks.slice(0, trackIndex), newTrack, ...tracks.slice(trackIndex + 1)]);
+  function handleTrackClick(trackId) {
+    setActiveTrackId(trackId);
+    setIsPlaying(false);
+    setPlaybackPosition(0);
   }
 
-  function handlePanChange(trackId, pan) {
-    const trackIndex = tracks.findIndex(track => track.id === trackId);
-    const track = tracks[trackIndex];
-    const newTrack = { ...track, pan };
-    setTracks([...tracks.slice(0, trackIndex), newTrack, ...tracks.slice(trackIndex + 1)]);
-  }
-
-  function toggleMute(trackId) {
-    const trackIndex = tracks.findIndex(track => track.id === trackId);
-    const track = tracks[trackIndex];
-    const newTrack = { ...track, isMuted: !track.isMuted };
-    setTracks([...tracks.slice(0, trackIndex), newTrack, ...tracks.slice(trackIndex + 1)]);
-  }
-
-  function toggleSolo(trackId) {
-    const trackIndex = tracks.findIndex(track => track.id === trackId);
-    const track = tracks[trackIndex];
-    const newTrack = { ...track, isSoloed: !track.isSoloed };
-    setTracks([...tracks.slice(0, trackIndex), newTrack, ...tracks.slice(trackIndex + 1)]);
-  }
-
-  function addEffect(trackId, effect) {
-    const trackIndex = tracks.findIndex(track => track.id === trackId);
-    const track = tracks[trackIndex];
-    const newTrack = { ...track, effects: [...track.effects, effect] };
-    setTracks([...tracks.slice(0, trackIndex), newTrack, ...tracks.slice(trackIndex + 1)]);
-  }
-
-  function removeEffect(trackId, effectIndex) {
-    const trackIndex = tracks.findIndex(track => track.id === trackId);
-    const track = tracks[trackIndex];
-    const effects = [...track.effects.slice(0, effectIndex), ...track.effects.slice(effectIndex + 1)];
-    const newTrack = { ...track, effects };
-    setTracks([...tracks.slice(0, trackIndex), newTrack, ...tracks.slice(trackIndex + 1)]);
-  }
-
-  function clearUndoRedoStacks() {
-    setUndoStack([]);
+  function handleNewTrackClick() {
+    const newTrack = {
+      id: uuidv4(),
+      name: `Track ${tracks.length + 1}`,
+      duration: '0:00',
+      audioChunks: [],
+    };
+    setTracks((tracks) => [...tracks, newTrack]);
+    setActiveTrackId(newTrack.id);
+    setUndoStack((stack) => [...stack, { type: 'add', track: newTrack }]);
     setRedoStack([]);
+  }
+
+  function formatDuration(duration) {
+    const minutes = Math.floor(duration / 60000);
+    const seconds = ((duration % 60000) / 1000).toFixed(0);
+    return `${minutes}:${seconds < 10 ? '0' : ''}${seconds}`;
   }
 
   return (
     <div className="App">
-      <header>
-        <h1>Digital Audio Workstation</h1>
-        <button onClick={addTrack}>Add Track</button>
-      </header>
-      <main>
-        <div className="tracks">
-          {tracks.map(track => (
-            <div
-              key={track.id}
-              className={`track ${track.id === activeTrackId ? 'active' : ''} ${track.isMuted ? 'muted' : ''} ${track.isSoloed ? 'soloed' : ''}`}
-            >
-              <div className="track-header">
-                <h2>{track.name}</h2>
-                <div className="track-controls">
-                  <button onClick={() => setActiveTrackId(track.id)}>
-                    <FontAwesomeIcon icon={faPlay} />
-                  </button>
-                  <button onClick={pausePlayback}>
-                    <FontAwesomeIcon icon={faPause} />
-                  </button>
-                  <button onClick={stopPlayback}>
-                    <FontAwesomeIcon icon={faStop} />
-                  </button>
-                  <button onClick={toggleRecording}>
-                    <FontAwesomeIcon icon={faRecordVinyl} />
-                  </button>
-                  <button onClick={() => removeTrack(track.id)}>
-                    <FontAwesomeIcon icon={faTrash} />
-                  </button>
-                  <button onClick={undo} disabled={undoStack.length === 0}>
-                    <FontAwesomeIcon icon={faUndo} />
-                  </button>
-                  <button onClick={redo} disabled={redoStack.length === 0}>
-                    <FontAwesomeIcon icon={faRedo} />
-                  </button>
-                </div>
-              </div>
-              <div className="track-body">
-                <div className="track-volume">
-                  <label htmlFor={`volume-${track.id}`}>Volume:</label>
-                  <input
-                    type="range"
-                    id={`volume-${track.id}`}
-                    min="0"
-                    max="1"
-                    step="0.01"
-                    value={track.volume}
-                    onChange={event => handleVolumeChange(track.id, parseFloat(event.target.value))}
-                  />
-                </div>
-                <div className="track-pan">
-                  <label htmlFor={`pan-${track.id}`}>Pan:</label>
-                  <input
-                    type="range"
-                    id={`pan-${track.id}`}
-                    min="-1"
-                    max="1"
-                    step="0.01"
-                    value={track.pan}
-                    onChange={event => handlePanChange(track.id, parseFloat(event.target.value))}
-                  />
-                </div>
-                <div className="track-effects">
-                  <h3>Effects:</h3>
-                  <ul>
-                    {track.effects.map((effect, index) => (
-                      <li key={index}>
-                        {effect.name}
-                        <button onClick={() => removeEffect(track.id, index)}>Remove</button>
-                      </li>
-                    ))}
-                  </ul>
-                </div>
-              </div>
-              <div className="track-footer">
-                <button onClick={() => toggleMute(track.id)}>{track.isMuted ? 'Unmute' : 'Mute'}</button>
-                <button onClick={() => toggleSolo(track.id)}>{track.isSoloed ? 'Unsolo' : 'Solo'}</button>
-                <button onClick={() => addEffect(track.id, { name: 'Reverb' })}>Add Reverb</button>
-                <button onClick={() => addEffect(track.id, { name: 'Delay' })}>Add Delay</button>
-              </div>
+      <div className="tracks-container">
+        {tracks.map((track) => (
+          <div
+            key={track.id}
+            className={`track-row ${track.id === activeTrackId ? 'active' : ''}`}
+            onClick={() => handleTrackClick(track.id)}
+          >
+            <div className="track-name">{track.name}</div>
+            <div className="track-duration">{track.duration}</div>
+            <div className="track-actions">
+              <button className="play-button">
+                <FontAwesomeIcon icon={faPlay} />
+              </button>
+              <button className="pause-button">
+                <FontAwesomeIcon icon={faPause} />
+              </button>
+              <button className="stop-button">
+                <FontAwesomeIcon icon={faStop} />
+              </button>
+              <button className="delete-button" onClick={deleteActiveTrack}>
+                <FontAwesomeIcon icon={faTrash} />
+              </button>
             </div>
-          ))}
-        </div>
-      </main>
+          </div>
+        ))}
+      </div>
+      <button
+        className={`record-button ${isRecording ? 'recording' : ''}`}
+        onClick={toggleRecording}
+      >
+        <FontAwesomeIcon icon={faRecordVinyl} />
+      </button>
+      <button className="new-track-button" onClick={handleNewTrackClick}>
+        <FontAwesomeIcon icon={faPlus} />
+      </button>
+      <button className="undo-button" onClick={undo}>
+        <FontAwesomeIcon icon={faUndo} />
+      </button>
+      <button className="redo-button" onClick={redo}>
+        <FontAwesomeIcon icon={faRedo} />
+      </button>
     </div>
   );
 }
