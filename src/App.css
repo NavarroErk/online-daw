@@ -101,7 +101,7 @@ body {
 }
 
 .track-row.active {
-  background-color: #eee;
+  background-color: grey;
 }
 
 .record-button.recording {

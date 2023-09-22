@@ -14,10 +14,57 @@ function App() {
   const [playbackPosition, setPlaybackPosition] = useState(0);
   const [undoStack, setUndoStack] = useState([]);
   const [redoStack, setRedoStack] = useState([]);
+  const [deviceIds, setDeviceIds] = useState({});
+  const [devices, setDevices] = useState([]);
+
   const mediaRecorderRef = useRef(null);
   const playbackIntervalRef = useRef(null);
 
   const [audioChunks, setAudioChunks] = useState([]);
+
+  navigator.mediaDevices.enumerateDevices().then((devices) => {
+    const audioDevices = devices.filter((device) => device.kind === 'audioinput');
+    if (audioDevices.length > 0) {
+      setDeviceIds((deviceIds) => {
+        const newDeviceIds = { ...deviceIds };
+        tracks.forEach((track) => {
+          if (!newDeviceIds[track.id]) {
+            newDeviceIds[track.id] = audioDevices[0].deviceId;
+          }
+        });
+        return newDeviceIds;
+      });
+    }
+  });
+
+  useEffect(() => {
+    navigator.mediaDevices.enumerateDevices().then((allDevices) => {
+      const audioDevices = allDevices.filter(device => device.kind === 'audioinput');
+      setDevices(audioDevices);
+      
+      if (window.stream) {
+        setTracks((tracks) => tracks.map((track) => {
+          if (deviceIds[track.id]) {
+            return {
+              ...track,
+              audio: new Howl({
+                src: URL.createObjectURL(new Blob(track.audioChunks)),
+                html5: true,
+                volume: 1.0,
+                onend: () => {
+                  setIsPlaying(false);
+                  setPlaybackPosition(0);
+                },
+              }),
+            };
+          } else {
+            return track;
+          }
+        }));
+      }
+    });
+}, []); // empty dependency array ensures this runs only once
+
 
   useEffect(() => {
     document.addEventListener('keydown', handleKeyDown);
@@ -42,31 +89,38 @@ function App() {
       stopPlayback();
     } else if (event.code === 'KeyZ' && event.ctrlKey) {
       event.preventDefault();
-      if (event.shiftKey) {
-        redo();
-      } else {
-        undo();
-      }
+      undo();
+    } else if (event.code === 'KeyY' && event.ctrlKey) {
+      event.preventDefault();
+      redo();
     } else if (event.code === 'Delete') {
       event.preventDefault();
       deleteActiveTrack();
     }
   }
 
-  function toggleRecording() {
+  function toggleRecording(trackId) {
     if (isRecording) {
       stopRecording();
     } else {
-      startRecording();
+      startRecording(trackId);
     }
   }
 
-  function startRecording() {
+  function startRecording(trackId, deviceId) {
     setIsRecording(true);
     setAudioChunks([]);
-    mediaRecorderRef.current = new MediaRecorder(window.stream);
-    mediaRecorderRef.current.addEventListener('dataavailable', handleDataAvailable);
-    mediaRecorderRef.current.start();
+    navigator.mediaDevices.getUserMedia({ audio: { deviceId: deviceId } })
+      .then((stream) => {
+        window.stream = stream;
+        mediaRecorderRef.current = new MediaRecorder(stream);
+        mediaRecorderRef.current.addEventListener('dataavailable', handleDataAvailable);
+        mediaRecorderRef.current.start();
+        setActiveTrackId(trackId);
+      })
+      .catch((error) => {
+        console.error('Error accessing microphone:', error);
+      });
   }
 
   function stopRecording() {
@@ -78,10 +132,16 @@ function App() {
       duration: formatDuration(audioChunks.length * 100),
       audioChunks: audioChunks,
     };
-    setTracks((tracks) => [...tracks, newTrack]);
-    setActiveTrackId(newTrack.id);
-    setUndoStack((stack) => [...stack, { type: 'add', track: newTrack }]);
+    setTracks((tracks) => tracks.map((track) => {
+      if (track.id === activeTrackId) {
+        return newTrack;
+      } else {
+        return track;
+      }
+    }));
+    setUndoStack((stack) => [...stack, { type: 'edit', trackId: activeTrackId, newTrack: newTrack }]);
     setRedoStack([]);
+    setActiveTrackId(null);
   }
 
   function handleDataAvailable(event) {
@@ -123,6 +183,18 @@ function App() {
           setTracks((tracks) => [...tracks, lastAction.track]);
           setActiveTrackId(lastAction.track.id);
           break;
+        case 'edit':
+          setTracks((tracks) => tracks.map((track) => {
+            if (track.id === lastAction.trackId) {
+              return lastAction.oldTrack;
+            } else if (track.id === lastAction.newTrack.id) {
+              return lastAction.newTrack;
+            } else {
+              return track;
+            }
+          }));
+          setActiveTrackId(lastAction.trackId);
+          break;
         default:
           break;
       }
@@ -143,6 +215,18 @@ function App() {
           setTracks((tracks) => tracks.filter((track) => track.id !== lastAction.track.id));
           setActiveTrackId(null);
           break;
+        case 'edit':
+          setTracks((tracks) => tracks.map((track) => {
+            if (track.id === lastAction.trackId) {
+              return lastAction.newTrack;
+            } else if (track.id === lastAction.oldTrack.id) {
+              return lastAction.oldTrack;
+            } else {
+              return track;
+            }
+          }));
+          setActiveTrackId(lastAction.newTrack.id);
+          break;
         default:
           break;
       }
@@ -157,6 +241,11 @@ function App() {
         setUndoStack((stack) => [...stack, { type: 'delete', track: trackToDelete }]);
         setRedoStack([]);
         setActiveTrackId(null);
+        setDeviceIds((deviceIds) => {
+          const newDeviceIds = { ...deviceIds };
+          delete newDeviceIds[activeTrackId];
+          return newDeviceIds;
+        });
       }
     }
   }
@@ -178,6 +267,14 @@ function App() {
     setActiveTrackId(newTrack.id);
     setUndoStack((stack) => [...stack, { type: 'add', track: newTrack }]);
     setRedoStack([]);
+  }
+
+  function handleDeviceChange(trackId, deviceId) {
+    setDeviceIds((deviceIds) => {
+      const newDeviceIds = { ...deviceIds };
+      newDeviceIds[trackId] = deviceId;
+      return newDeviceIds;
+    });
   }
 
   function formatDuration(duration) {
@@ -210,16 +307,24 @@ function App() {
               <button className="delete-button" onClick={deleteActiveTrack}>
                 <FontAwesomeIcon icon={faTrash} />
               </button>
+              <button
+                className={`record-button ${isRecording && activeTrackId === track.id ? 'recording' : ''}`}
+                onClick={() => toggleRecording(track.id)}
+              >
+                <FontAwesomeIcon icon={faRecordVinyl} />
+              </button>
+              {window.stream && (
+                <DeviceSelector
+                trackId={track.id}
+                devices={devices}
+                deviceIds={deviceIds}
+                onChange={handleDeviceChange}
+                />
+              )}
             </div>
           </div>
         ))}
       </div>
-      <button
-        className={`record-button ${isRecording ? 'recording' : ''}`}
-        onClick={toggleRecording}
-      >
-        <FontAwesomeIcon icon={faRecordVinyl} />
-      </button>
       <button className="new-track-button" onClick={handleNewTrackClick}>
         <FontAwesomeIcon icon={faPlus} />
       </button>
@@ -230,6 +335,29 @@ function App() {
         <FontAwesomeIcon icon={faRedo} />
       </button>
     </div>
+  );
+}
+
+function DeviceSelector({ trackId, devices, deviceIds, onChange }) {
+  function handleChange(event) {
+    onChange(trackId, event.target.value);
+  }
+
+  if (!window.stream) {
+    return null;
+  }
+
+  return (
+    <select
+      className="device-select"
+      value={deviceIds[trackId] || ''}
+      onChange={handleChange}
+    >
+      <option value="">Select device...</option>
+      {devices.map((device) => (
+        <option key={device.deviceId} value={device.deviceId}>{device.label}</option>
+      ))}
+    </select>
   );
 }
 
