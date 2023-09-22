@@ -108,10 +108,13 @@ function App() {
   }
 
   function startRecording(trackId, deviceId) {
+
+    console.log('startRecording', trackId, deviceId);
     setIsRecording(true);
     setAudioChunks([]);
     navigator.mediaDevices.getUserMedia({ audio: { deviceId: deviceId } })
       .then((stream) => {
+        console.log('getUserMedia success');
         window.stream = stream;
         mediaRecorderRef.current = new MediaRecorder(stream);
         mediaRecorderRef.current.addEventListener('dataavailable', handleDataAvailable);
@@ -124,22 +127,30 @@ function App() {
   }
 
   function stopRecording() {
+    console.log('stopRecording');
     setIsRecording(false);
-    mediaRecorderRef.current.stop();
+    if (mediaRecorderRef.current) {
+      mediaRecorderRef.current.stop();
+    }
     const newTrack = {
       id: uuidv4(),
       name: `Track ${tracks.length + 1}`,
       duration: formatDuration(audioChunks.length * 100),
       audioChunks: audioChunks,
     };
-    setTracks((tracks) => tracks.map((track) => {
-      if (track.id === activeTrackId) {
-        return newTrack;
-      } else {
-        return track;
-      }
-    }));
-    setUndoStack((stack) => [...stack, { type: 'edit', trackId: activeTrackId, newTrack: newTrack }]);
+    setTracks((tracks) =>
+      tracks.map((track) => {
+        if (track.id === activeTrackId) {
+          return newTrack;
+        } else {
+          return track;
+        }
+      })
+    );
+    setUndoStack((stack) => [
+      ...stack,
+      { type: 'edit', trackId: activeTrackId, newTrack: newTrack },
+    ]);
     setRedoStack([]);
     setActiveTrackId(null);
   }
@@ -149,6 +160,7 @@ function App() {
   }
 
   function startPlayback() {
+    console.log('startPlayback');
     if (!activeTrackId) {
       setActiveTrackId(tracks[0].id);
     }
@@ -159,11 +171,13 @@ function App() {
   }
 
   function pausePlayback() {
+    console.log('pausePlayback');
     setIsPlaying(false);
     clearInterval(playbackIntervalRef.current);
   }
 
   function stopPlayback() {
+    console.log('stopPlayback');
     setIsPlaying(false);
     setPlaybackPosition(0);
     clearInterval(playbackIntervalRef.current);
@@ -295,13 +309,13 @@ function App() {
             <div className="track-name">{track.name}</div>
             <div className="track-duration">{track.duration}</div>
             <div className="track-actions">
-              <button className="play-button">
+              <button className="play-button" onClick={startPlayback}>
                 <FontAwesomeIcon icon={faPlay} />
               </button>
-              <button className="pause-button">
+              <button className="pause-button" onClick={pausePlayback}>
                 <FontAwesomeIcon icon={faPause} />
               </button>
-              <button className="stop-button">
+              <button className="stop-button" onClick={stopPlayback}>
                 <FontAwesomeIcon icon={faStop} />
               </button>
               <button className="delete-button" onClick={deleteActiveTrack}>
@@ -313,7 +327,7 @@ function App() {
               >
                 <FontAwesomeIcon icon={faRecordVinyl} />
               </button>
-              {window.stream && (
+              {(
                 <DeviceSelector
                 trackId={track.id}
                 devices={devices}
@@ -321,6 +335,7 @@ function App() {
                 onChange={handleDeviceChange}
                 />
               )}
+
             </div>
           </div>
         ))}
@@ -340,13 +355,16 @@ function App() {
 
 function DeviceSelector({ trackId, devices, deviceIds, onChange }) {
   function handleChange(event) {
+    console.log('onChange()');
     onChange(trackId, event.target.value);
   }
 
   if (!window.stream) {
+    console.log('stream not found');
     return null;
   }
 
+  console.log('stream found!');
   return (
     <select
       className="device-select"
